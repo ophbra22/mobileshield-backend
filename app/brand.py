@@ -14,6 +14,43 @@ PROTECTED_BRANDS = {
     'telegram': 'telegram.org',
 }
 
+BRAND_KEYWORDS = [
+    # generic
+    'bank',
+    'paypal',
+    'visa',
+    'mastercard',
+    'amex',
+    'appleid',
+    'google',
+    'microsoft',
+    'office',
+    'outlook',
+    'icloud',
+    # israeli banks / fintech
+    'leumi',
+    'hapoalim',
+    'discount',
+    'mizrahi',
+    'beinleumi',
+    'onezero',
+    'pepper',
+]
+
+# allowlist of official domains per brand to avoid false positives
+BRAND_ALLOWLIST_DOMAINS: dict[str, set[str]] = {
+    'paypal': {'paypal.com'},
+    'google': {'google.com', 'youtube.com'},
+    'microsoft': {'microsoft.com', 'office.com', 'live.com', 'outlook.com'},
+    'appleid': {'apple.com', 'icloud.com'},
+    'leumi': {'leumi.co.il'},
+    'hapoalim': {'bankhapoalim.co.il', 'poalim.biz'},
+    'discount': {'discountbank.co.il'},
+    'mizrahi': {'mizrahitfahot.co.il', 'mtb.co.il'},
+    'beinleumi': {'bankisrael.co.il', 'bnpparibas.com'},
+    'pepper': {'pepper.co.il'},
+}
+
 HOMOGLYPH_MAP = {
     '0': 'o',
     '1': 'l',
@@ -52,6 +89,58 @@ def _levenshtein(a: str, b: str) -> int:
             curr.append(min(insert_cost, delete_cost, replace_cost))
         prev_row = curr
     return prev_row[-1]
+
+
+def detect_typosquat(registered_domain: str) -> tuple[str | None, int | None, str]:
+    candidate = (registered_domain or '').split('.')[0].lower()
+    targets = set(
+        [
+            'wpengine',
+            'cloudfront',
+            'cloudflare',
+            'firebaseapp',
+            'netlify',
+            'vercel',
+            'github',
+            'pages',
+            'google',
+            'microsoft',
+            'apple',
+            'paypal',
+        ]
+        + BRAND_KEYWORDS
+    )
+    best: tuple[str | None, int | None] = (None, None)
+    for target in targets:
+        dist = _levenshtein(candidate, target)
+        if dist <= 2 and len(candidate) >= 6:
+            if best[1] is None or dist < best[1]:
+                best = (target, dist)
+    return best[0], best[1], candidate
+
+
+def detect_brand_impersonation(hostname: str, registered_domain: str) -> dict:
+    """Detect brand keywords in hostname/subdomain that are not present/allowlisted on the registered domain."""
+    hostname_l = hostname.lower()
+    reg_l = registered_domain.lower() if registered_domain else ''
+    brands_found = [bk for bk in BRAND_KEYWORDS if bk in hostname_l]
+    allowlisted = False
+    for b in brands_found:
+        allowed = BRAND_ALLOWLIST_DOMAINS.get(b, set())
+        if reg_l in allowed or any(reg_l.endswith('.' + a) for a in allowed):
+            allowlisted = True
+            break
+    is_brand_in_subdomain = bool(brands_found)
+    is_registered_domain_suspicious = any(bk in reg_l for bk in brands_found) is False
+    typosquat_target, distance, normalized_candidate = detect_typosquat(registered_domain)
+    return {
+        'brands_found': brands_found,
+        'is_brand_in_subdomain': is_brand_in_subdomain,
+        'is_registered_domain_suspicious': is_registered_domain_suspicious and not allowlisted,
+        'typosquat_target': typosquat_target,
+        'typosquat_distance': distance,
+        'normalized_candidate': normalized_candidate,
+    }
 
 
 @dataclass

@@ -39,41 +39,97 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000';
+export type AuthUser = { id?: number | string; email?: string; created_at?: string };
+export type LoginResponse = { access_token: string; user?: AuthUser; api_key?: string };
+export type RegisterResponse = { access_token: string; user?: AuthUser; api_key?: string };
 
-const headers = (apiKey?: string) => ({
-  'Content-Type': 'application/json',
-  ...(apiKey ? { 'X-API-Key': apiKey } : {}),
-});
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_BASE ||
+  'http://localhost:8000';
 
-async function handle<T>(res: Response): Promise<T> {
+let cachedAuthToken: string | null = null;
+let cachedApiKey: string | null = null;
+
+export const getAuthToken = (): string | null => {
+  if (cachedAuthToken) return cachedAuthToken;
+  if (typeof window === 'undefined') return null;
+  const val = localStorage.getItem('jwt');
+  cachedAuthToken = val;
+  return val;
+};
+
+export const setAuthToken = (token: string | null) => {
+  cachedAuthToken = token;
+  if (typeof window !== 'undefined') {
+    if (token) localStorage.setItem('jwt', token);
+    else localStorage.removeItem('jwt');
+  }
+};
+
+export const getApiKey = (): string | null => {
+  if (cachedApiKey) return cachedApiKey;
+  if (typeof window === 'undefined') return null;
+  const val = localStorage.getItem('manual_api_key');
+  cachedApiKey = val || null;
+  return cachedApiKey;
+};
+
+export const setApiKey = (key: string | null) => {
+  cachedApiKey = key;
+  if (typeof window !== 'undefined') {
+    if (key) localStorage.setItem('manual_api_key', key);
+    else localStorage.removeItem('manual_api_key');
+  }
+};
+
+const makeRequestId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `req_${Math.random().toString(16).slice(2)}`;
+};
+
+const buildHeaders = (extra?: Record<string, string>) => {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', ...(extra || {}) };
+  const token = getAuthToken();
+  const key = getApiKey();
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  else if (key) h['X-API-Key'] = key;
+  h['X-Request-Id'] = makeRequestId();
+  return h;
+};
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: buildHeaders(init?.headers as Record<string, string>),
+  });
   if (!res.ok) {
     const text = await res.text();
     throw new ApiError(text || res.statusText, res.status);
   }
-  return res.json() as Promise<T>;
+  if (res.headers.get('Content-Type')?.includes('application/json')) {
+    return (await res.json()) as T;
+  }
+  return (await res.text()) as unknown as T;
 }
 
-export async function analyzeUrl(url: string, apiKey: string): Promise<AnalysisResponse> {
-  const res = await fetch(`${API_BASE}/v1/analyze`, {
+export async function analyzeUrl(url: string): Promise<AnalysisResponse> {
+  return apiFetch<AnalysisResponse>('/v1/analyze', {
     method: 'POST',
-    headers: headers(apiKey),
     body: JSON.stringify({ url }),
   });
-  return handle<AnalysisResponse>(res);
 }
 
-export async function fetchScans(limit: number, apiKey: string): Promise<{ items: ScanSummary[]; count: number }> {
-  const res = await fetch(`${API_BASE}/v1/scans?limit=${limit}`, {
+export async function fetchScans(limit: number): Promise<{ items: ScanSummary[]; count: number }> {
+  return apiFetch<{ items: ScanSummary[]; count: number }>(`/v1/scans?limit=${limit}`, {
     method: 'GET',
-    headers: headers(apiKey),
   });
-  return handle<{ items: ScanSummary[]; count: number }>(res);
 }
 
-export async function downloadReport(scanId: number, apiKey: string): Promise<Blob> {
+export async function downloadReport(scanId: number): Promise<Blob> {
   const res = await fetch(`${API_BASE}/v1/scans/${scanId}/report.pdf`, {
-    headers: headers(apiKey),
+    method: 'GET',
+    headers: buildHeaders(),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -88,7 +144,21 @@ export async function checkHealth(): Promise<boolean> {
     if (!res.ok) return false;
     const data = await res.json();
     return Boolean(data?.ok);
-  } catch (err) {
+  } catch {
     return false;
   }
+}
+
+export async function authRegister(email: string, password: string): Promise<RegisterResponse> {
+  return apiFetch<RegisterResponse>('/v1/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function authLogin(email: string, password: string): Promise<LoginResponse> {
+  return apiFetch<LoginResponse>('/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
 }

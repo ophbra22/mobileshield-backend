@@ -1,0 +1,8 @@
+{
+  "/_not-found": "app/_not-found.js",
+  "/history/[id]/page": "app/history/[id]/page.js",
+  "/history/page": "app/history/page.js",
+  "/page": "app/page.js",
+  "/keys/page": "app/keys/page.js",
+  "/api/report/pdf/route": "app/api/report/pdf/route.js"
+}

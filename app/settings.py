@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     admin_allow_ips: str | None = None
     env: str = 'dev'  # dev or prod
     log_level: str = 'info'
+    jwt_secret: str = 'change-me'
+    jwt_expires_minutes: int = 120
+    server_key: str = 'change-me-server-key'
+    allowlist_enabled: bool = True
+    allowlist_min_score: int = 50
+    allowlist_refresh_hours: int = 24
+    allowlist_sources: str = 'local_popular,remote_popular'
+    allowlist_cache_path: str = '/tmp/mobileshield_allowlist.txt'
 
 
 @lru_cache(maxsize=1)

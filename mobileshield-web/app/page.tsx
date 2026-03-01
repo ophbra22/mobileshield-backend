@@ -1,191 +1,187 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Shield } from 'lucide-react';
-import { ApiKeyCard } from './components/ApiKeyCard';
-import { AnalyzeForm } from './components/AnalyzeForm';
-import { RecentScans } from './components/RecentScans';
-import { ResultCard } from './components/ResultCard';
-import { analyzeUrl, ApiError, fetchScans, ScanSummary, checkHealth, AnalysisResponse, downloadReport } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { HeaderBar } from './components/HeaderBar';
+import { ScanForm } from './components/ScanForm';
+import { ResultPanel } from './components/ResultPanel';
+import { SettingsDrawer } from './components/SettingsDrawer';
+import { analyzeUrl, downloadReport, fetchScans, setApiKey, setAuthToken } from '@/lib/api';
+import type { AnalysisResponse, ScanSummary } from '@/lib/api';
+import { CheckCircle2, Shield, AlertTriangle } from 'lucide-react';
+import { Card } from './components/ui/card';
+import { Button } from './components/ui/button';
+import { StatusPill } from './components/StatusPill';
 
-const localStorageKey = 'mobileshield_api_key';
-
-const isValidUrl = (value: string) => {
-  try {
-    const candidate = value.match(/^https?:\/\//i) ? value : `https://${value}`;
-    const parsed = new URL(candidate);
-    return Boolean(parsed.hostname && parsed.hostname.includes('.'));
-  } catch (err) {
-    return false;
-  }
-};
-
-export default function Page() {
-  const [apiKey, setApiKey] = useState('');
-  const [rememberKey, setRememberKey] = useState(true);
-  const [url, setUrl] = useState('');
-  const [healthOk, setHealthOk] = useState<boolean | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+export default function Home() {
   const [result, setResult] = useState<AnalysisResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [scans, setScans] = useState<ScanSummary[]>([]);
-  const [scansLoading, setScansLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [history, setHistory] = useState<ScanSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [requestId, setRequestId] = useState<string | null>(null);
+  const [lang, setLang] = useState<'he' | 'en'>('he');
+  const [isAuthed, setIsAuthed] = useState(true); // TEMP public mode
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(localStorageKey);
-    if (saved) setApiKey(saved);
-    checkHealth().then(setHealthOk);
+    if (typeof window === 'undefined') return;
+    fetchHistory();
   }, []);
 
-  useEffect(() => {
-    if (!apiKey) {
-      setScans([]);
-      return;
-    }
-    setScansLoading(true);
-    fetchScans(20, apiKey)
-      .then((data) => setScans(data.items))
-      .catch(() => {})
-      .finally(() => setScansLoading(false));
-  }, [apiKey]);
-
-  const handleSaveKey = (value: string, remember: boolean) => {
-    setApiKey(value);
-    if (remember) {
-      window.localStorage.setItem(localStorageKey, value);
-    } else {
-      window.localStorage.removeItem(localStorageKey);
-    }
-  };
-
-  const loadScanDetails = (scan: ScanSummary) => {
-    const mapped: AnalysisResponse = {
-      scan_id: scan.id,
-      normalized_url: scan.normalized_url,
-      domain: scan.domain,
-      final_url: scan.final_url,
-      redirect_hops: 0,
-      risk_score: scan.risk_score,
-      verdict: scan.verdict,
-      confidence: scan.confidence,
-      reasons: scan.reasons,
-      signals: {
-        domain_reputation: scan.domain_reputation,
-      },
-      breakdown: scan.breakdown || [],
-      reputation: scan.reputation,
-    };
-    setResult(mapped);
-  };
-
-  const submitAnalysis = async () => {
-    setError(null);
-    const trimmed = url.trim();
-    if (!trimmed || !apiKey || !isValidUrl(trimmed)) {
-      setError('Enter a valid URL and API key.');
-      return;
-    }
-    setIsAnalyzing(true);
+  const fetchHistory = async () => {
     try {
-      const res = await analyzeUrl(trimmed, apiKey);
+      const res = await fetchScans(10);
+      setHistory(res.items);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const onAnalyze = async (url: string) => {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await analyzeUrl(url);
       setResult(res);
-      const refreshed = await fetchScans(20, apiKey);
-      setScans(refreshed.items);
-    } catch (err: unknown) {
-      if (err instanceof ApiError) {
-        if (err.status === 401) setError('Invalid or missing API key. Save a valid key to continue.');
-        else if (err.status === 429) setError('Rate limit exceeded. Please wait a moment and try again.');
-        else setError(err.message || 'Unexpected error while analyzing.');
-      } else {
-        setError('Network error. Please check connectivity and try again.');
-      }
+      const rid = (res as any).request_id;
+      if (rid) setRequestId(rid);
+      fetchHistory();
+    } catch (e: any) {
+      setErrorMsg(e.message || 'שגיאה');
     } finally {
-      setIsAnalyzing(false);
+      setLoading(false);
     }
   };
 
-  const healthBadge = useMemo(() => {
-    if (healthOk === null) return 'Checking health…';
-    return healthOk ? 'API online' : 'API offline';
-  }, [healthOk]);
-
-  const handleExport = async () => {
-    if (!result?.scan_id || !apiKey) return;
-    setDownloading(true);
+  const onExport = async (scanId: number) => {
+    setExporting(true);
     try {
-      const blob = await downloadReport(result.scan_id, apiKey);
-      const urlObj = window.URL.createObjectURL(blob);
+      const blob = await downloadReport(scanId);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = urlObj;
-      a.download = `mobileshield_scan_${result.scan_id}.pdf`;
+      a.href = url;
+      a.download = `scan_${scanId}.pdf`;
       a.click();
-      window.URL.revokeObjectURL(urlObj);
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'Failed to export PDF.';
-      setError(message);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert('Export failed');
     } finally {
-      setDownloading(false);
+      setExporting(false);
     }
   };
+
+  const t = (he: string, en: string) => (lang === 'he' ? he : en);
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-10 flex flex-col gap-6">
-      <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 shadow-card flex items-center justify-center text-slate-900">
-            <Shield size={22} />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">MobileShield AI</h1>
-            <p className="text-slate-400">Instant phishing insight for SMS links.</p>
-          </div>
-        </div>
-        <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-full border ${healthOk ? 'border-emerald-500/60 text-emerald-200' : 'border-amber-500/60 text-amber-200'}`}>
-          <span className={`h-2.5 w-2.5 rounded-full ${healthOk ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-          <span className="text-sm font-semibold">{healthBadge}</span>
-        </div>
-      </header>
+    <main className="max-w-6xl mx-auto px-4 py-8 space-y-8">
+      <HeaderBar
+        onLoginClick={() => {}}
+        onLogout={() => {
+          setAuthToken(null);
+          setApiKey(null);
+          setIsAuthed(true);
+        }}
+        onOpenKeys={() => (window.location.href = '/keys')}
+        onOpenSettings={() => setShowSettings(true)}
+        isAuthenticated={isAuthed}
+        lang={lang}
+        onToggleLang={() => setLang(lang === 'he' ? 'en' : 'he')}
+      />
 
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 flex flex-col gap-4">
-          <AnalyzeForm
-            url={url}
-            onChange={setUrl}
-            onSubmit={submitAnalysis}
-            loading={isAnalyzing}
-            disabled={isAnalyzing || !apiKey || !isValidUrl(url)}
-          />
-          {error && (
-            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-100 px-4 py-3 flex items-center gap-2">
-              <AlertTriangle size={18} />
-              <span>{error}</span>
-            </div>
-          )}
-          <ResultCard result={result} onExport={handleExport} exporting={downloading} />
-        </div>
-        <div className="flex flex-col gap-4">
-          <ApiKeyCard
-            value={apiKey}
-            remember={rememberKey}
-            onChange={setApiKey}
-            onToggleRemember={setRememberKey}
-            onSave={handleSaveKey}
-          />
-          <RecentScans scans={scans} loading={scansLoading} onSelect={loadScanDetails} />
-          <div className="gradient-card rounded-2xl p-5 text-sm text-slate-300 flex items-start gap-3">
-            <CheckCircle2 className="text-emerald-300" size={18} />
-            <div>
-              <p className="font-semibold">How to use</p>
-              <ol className="list-decimal list-inside text-slate-400 mt-1 space-y-1">
-                <li>Mint an API key via <code>/admin/create-api-key</code> on the backend.</li>
-                <li>Paste it into the card above and save.</li>
-                <li>Drop in a URL and hit Analyze to view verdicts and signals.</li>
-              </ol>
-            </div>
+      {errorMsg && <div className="rounded-xl border border-danger/30 bg-danger/5 text-danger px-4 py-2 text-sm">{errorMsg}</div>}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-8 items-start">
+        <section className="space-y-4">
+          <Card className="p-6 space-y-3">
+            <p className="text-3xl font-bold text-[var(--text)]">{t('ה-SMS חשוד? סרקו אותו!', 'Suspicious SMS? Scan it!')}</p>
+            <p className="text-[var(--muted)]">
+              {t('הדביקו טקסט או קישור ונזהה פישינג, הפניות ומוניטין דומיין בזמן אמת.', 'Paste text or a link to detect phishing, redirects and domain reputation.')}
+            </p>
+            <ScanForm onSubmit={onAnalyze} loading={loading} />
+          </Card>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <ExampleCard
+              title="קישור עדין"
+              verdict="benign"
+              text="https://gov.il/info/covid"
+              color="emerald"
+              icon={<CheckCircle2 />}
+            />
+            <ExampleCard
+              title="נראה חשוד"
+              verdict="suspicious"
+              text="http://pay-pal-secure-login.com"
+              color="amber"
+              icon={<AlertTriangle />}
+            />
+            <ExampleCard title="פישינג" verdict="malicious" text="http://bankleumi.secure-login.ru" color="rose" icon={<Shield />} />
           </div>
-        </div>
-      </section>
+        </section>
+
+        <section className="space-y-4">
+          <ResultPanel result={result} onExport={onExport} exporting={exporting} requestId={requestId} />
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-[var(--text)]">סריקות אחרונות</p>
+              <Button variant="ghost" size="sm" onClick={() => (window.location.href = '/history')}>
+                לכל ההיסטוריה →
+              </Button>
+            </div>
+            <div className="space-y-1">
+              {history.map((h) => (
+                <button
+                  key={h.id}
+                  onClick={() => (window.location.href = `/history`)}
+                  className="w-full text-left border border-border rounded-xl px-3 py-2 hover:bg-surface2 transition flex items-center gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold break-all">{h.domain}</p>
+                    <p className="text-xs text-muted2">{new Date(h.created_at).toLocaleString('he-IL')}</p>
+                  </div>
+                  <StatusPill verdict={h.verdict} />
+                  <span className="text-xs text-muted">{h.risk_score ?? ''}</span>
+                </button>
+              ))}
+              {history.length === 0 && <p className="text-xs text-[var(--muted)]">אין סריקות עדיין.</p>}
+            </div>
+          </Card>
+        </section>
+      </div>
+
+      <SettingsDrawer open={showSettings} onClose={() => setShowSettings(false)} initialApiBase={process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:8000'} />
     </main>
   );
 }
+
+const ExampleCard = ({
+  title,
+  verdict,
+  text,
+  color,
+  icon,
+}: {
+  title: string;
+  verdict: string;
+  text: string;
+  color: 'emerald' | 'amber' | 'rose';
+  icon: React.ReactNode;
+}) => {
+  const colors =
+    color === 'emerald'
+      ? 'bg-success/10 border border-success/30 text-success'
+      : color === 'amber'
+      ? 'bg-warning/10 border border-warning/30 text-warning-700'
+      : 'bg-danger/10 border border-danger/30 text-danger';
+  return (
+    <div className={`rounded-2xl p-4 ${colors} space-y-1`}>
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        {icon}
+        {title}
+      </div>
+      <p className="text-xs text-text truncate">{text}</p>
+      <span className="text-2xs uppercase opacity-75">{verdict}</span>
+    </div>
+  );
+};

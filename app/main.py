@@ -35,11 +35,18 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.analysis import analyze_url
-from app.auth import require_admin_ip_allowlist, require_admin_token, require_api_key
+from app.auth import (
+    require_admin_ip_allowlist,
+    require_admin_token,
+    # TEMP: public beta - auth/keys disabled, identity enforcement skipped
+)
 from app.db.database import Base, engine
 from app.db.deps import get_db
-from app.db.models import ApiKey, Scan
+from app.db.models import ApiKey, Scan, User
 from app.settings import get_settings
+# TEMP: auth disabled for public beta
+# from app.routers import auth as auth_router
+# from app.routers import keys as keys_router
 
 settings = get_settings()
 app = FastAPI(title='MobileShield AI')
@@ -60,7 +67,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
         response.headers.setdefault('Referrer-Policy', 'no-referrer')
         response.headers.setdefault('X-Frame-Options', 'DENY')
-        response.headers.setdefault('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
+        docs_paths = {'/docs', '/docs/', '/redoc', '/openapi.json', '/docs/oauth2-redirect'}
+        if request.url.path in docs_paths:
+            # Relaxed CSP for Swagger UI assets from jsdelivr
+            csp = (
+                "default-src 'self'; "
+                "base-uri 'self'; "
+                "frame-ancestors 'none'; "
+                "object-src 'none'; "
+                "img-src 'self' data: https://fastapi.tiangolo.com https:; "
+                "font-src 'self' data: https:; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "connect-src 'self' https:;"
+            )
+            response.headers['Content-Security-Policy'] = csp
+        else:
+            response.headers.setdefault('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
         return response
 
 
@@ -85,6 +108,9 @@ class RequestIdLoggingMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIdLoggingMiddleware)
 
+# TEMP: auth disabled for public beta. Re-enable when returning to authenticated mode.
+# app.include_router(auth_router.router)
+# app.include_router(keys_router.router)
 
 class AnalyzeRequest(BaseModel):
     url: str = Field(min_length=3, max_length=2048, pattern=r'^https?://.+')
@@ -111,6 +137,12 @@ def startup() -> None:
                 )
                 connection.execute(
                     text("ALTER TABLE scans ADD COLUMN IF NOT EXISTS reputation_score_hint INTEGER;")
+                )
+                connection.execute(
+                    text("ALTER TABLE scans ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;")
+                )
+                connection.execute(
+                    text("ALTER TABLE scans ADD COLUMN IF NOT EXISTS api_key_id INTEGER NULL;")
                 )
             return
         except OperationalError as exc:
@@ -141,8 +173,11 @@ def create_api_key(
     __: None = Depends(require_admin_ip_allowlist),
     db: Session = Depends(get_db),
 ) -> dict:
-    api_key_value = f"ms_live_{secrets.token_urlsafe(32)}"
-    record = ApiKey(name=payload.name, key=api_key_value, is_active=True)
+    from app.security import generate_api_key, hash_api_key
+
+    api_key_value = generate_api_key()
+    key_hash, prefix, last4 = hash_api_key(api_key_value)
+    record = ApiKey(name=payload.name, key_hash=key_hash, key_prefix=prefix, last4=last4, is_active=True)
     db.add(record)
     db.commit()
     return {'name': payload.name, 'api_key': api_key_value}
@@ -151,10 +186,13 @@ def create_api_key(
 @app.post('/v1/analyze')
 def analyze(
     payload: AnalyzeRequest,
-    _: ApiKey = Depends(require_api_key),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
     try:
+        user: User | None = None
+        api_key: ApiKey | None = None
+        # TEMP public beta: no API key / auth required. Consider re-adding rate limit here.
         result = analyze_url(payload.url, db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -171,6 +209,8 @@ def analyze(
         breakdown=result.breakdown,
         reputation=result.reputation,
         reputation_score_hint=result.signals.get('domain_reputation', {}).get('score_hint') if result.signals else None,
+        user_id=user.id if user else None,
+        api_key_id=api_key.id if api_key else None,
     )
     db.add(scan)
     db.commit()
@@ -194,11 +234,13 @@ def analyze(
 
 @app.get('/v1/scans')
 def list_scans(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
-    _: ApiKey = Depends(require_api_key),
     db: Session = Depends(get_db),
 ) -> dict:
-    rows = db.execute(select(Scan).order_by(desc(Scan.created_at)).limit(limit)).scalars().all()
+    # TEMP public beta: all scans visible, no auth required.
+    query = select(Scan).order_by(desc(Scan.created_at)).limit(limit)
+    rows = db.execute(query).scalars().all()
     items = [
         {
             'id': row.id,
@@ -213,16 +255,41 @@ def list_scans(
             'breakdown': row.breakdown,
             'reputation': row.reputation,
             'domain_reputation': row.signals.get('domain_reputation') if isinstance(row.signals, dict) else None,
+            'user_id': row.user_id,
+            'api_key_id': row.api_key_id,
         }
         for row in rows
     ]
     return {'items': items, 'count': len(items)}
 
 
+@app.get('/v1/scans/{scan_id}')
+def get_scan(request: Request, scan_id: int, db: Session = Depends(get_db)) -> dict:
+    scan = db.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Scan not found')
+    return {
+        'id': scan.id,
+        'created_at': scan.created_at.astimezone(UTC).isoformat() if scan.created_at else datetime.now(UTC).isoformat(),
+        'normalized_url': scan.normalized_url,
+        'domain': scan.domain,
+        'final_url': scan.final_url,
+        'risk_score': scan.risk_score,
+        'verdict': scan.verdict,
+        'confidence': scan.confidence,
+        'reasons': scan.reasons,
+        'signals': scan.signals,
+        'breakdown': scan.breakdown,
+        'reputation': scan.reputation,
+        'user_id': scan.user_id,
+        'api_key_id': scan.api_key_id,
+    }
+
+
 @app.get('/v1/scans/{scan_id}/report.pdf')
 def export_report(
+    request: Request,
     scan_id: int,
-    _: ApiKey = Depends(require_api_key),
     db: Session = Depends(get_db),
 ):
     scan = db.get(Scan, scan_id)
