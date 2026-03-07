@@ -1,29 +1,27 @@
 "use client";
 
 import { useState } from 'react';
-import { Globe2, LogIn, LogOut, UserRound, KeyRound, Settings, Languages } from 'lucide-react';
-import { Button } from './ui/button';
+import { Globe2, Languages, Mail, Copy, Check } from 'lucide-react';
+import { Button, buttonVariants } from './ui/button';
+import { useLanguage } from '../context/LanguageContext';
+import { twMerge } from 'tailwind-merge';
 
-interface Props {
-  onLoginClick: () => void;
-  onLogout: () => void;
-  onOpenKeys: () => void;
-  onOpenSettings: () => void;
-  isAuthenticated: boolean;
-  lang: 'he' | 'en';
-  onToggleLang: () => void;
-}
+export const HeaderBar = () => {
+  const [contactOpen, setContactOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { lang, toggleLanguage, t } = useLanguage();
+  const email = 'MobileShield@gmail.com';
 
-export const HeaderBar = ({
-  onLoginClick,
-  onLogout,
-  onOpenKeys,
-  onOpenSettings,
-  isAuthenticated,
-  lang,
-  onToggleLang,
-}: Props) => {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(email);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
     <header className="flex items-center justify-between py-4 border-b border-border">
       <div className="flex items-center gap-2 text-text">
@@ -32,58 +30,39 @@ export const HeaderBar = ({
         </div>
         <div>
           <p className="text-lg font-bold">MobileShield AI</p>
-          <p className="text-xs text-muted">הגנה חכמה על קישורים ב-SMS</p>
+          <p className="text-xs text-muted">{t.headerTagline}</p>
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={onToggleLang} className="flex items-center gap-1">
+      <div className="flex items-center gap-2 relative">
+        <Button variant="ghost" size="sm" onClick={toggleLanguage} className="flex items-center gap-1">
           <Languages size={16} />
-          {lang === 'he' ? 'עברית' : 'EN'}
+          {lang === 'he' ? 'EN' : 'עברית'}
         </Button>
-        <Button variant="secondary" size="sm" onClick={onOpenSettings} className="flex items-center gap-1">
-          <Settings size={16} />
-          הגדרות
-        </Button>
+        <a
+          href="https://www.linkedin.com/in/ophir-braude-188252378/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={twMerge(buttonVariants({ variant: 'secondary', size: 'sm' }), 'flex items-center gap-1')}
+        >
+          LinkedIn
+        </a>
         <div className="relative">
-          <Button variant="primary" size="sm" onClick={() => setMenuOpen((o) => !o)} className="flex items-center gap-1">
-            <UserRound size={16} />
-            {isAuthenticated ? 'החשבון שלי' : 'התחברות'}
+          <Button variant="primary" size="sm" onClick={() => setContactOpen((o) => !o)} className="flex items-center gap-1">
+            <Mail size={16} />
+            {t.contact}
           </Button>
-          {menuOpen && (
-            <div className="absolute left-0 mt-2 w-44 rounded-xl bg-surface border border-border shadow-md z-20 text-sm">
-              {!isAuthenticated && (
-                <button
-                  onClick={() => {
-                    onLoginClick();
-                    setMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface2 text-text"
-                >
-                  <LogIn size={16} /> כניסה / הרשמה
-                </button>
-              )}
-              {isAuthenticated && (
-                <>
-                  <button
-                    onClick={() => {
-                      onOpenKeys();
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface2 text-text"
-                  >
-                    <KeyRound size={16} /> המפתחות שלי
-                  </button>
-                  <button
-                    onClick={() => {
-                      onLogout();
-                      setMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface2 text-text"
-                  >
-                    <LogOut size={16} /> יציאה
-                  </button>
-                </>
-              )}
+          {contactOpen && (
+            <div className="absolute right-0 mt-2 w-64 rounded-xl bg-surface border border-border shadow-md z-30 p-3 space-y-2">
+              <p className="text-sm font-semibold text-text break-all">{email}</p>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" onClick={handleCopy} className="flex items-center gap-1">
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                  {copied ? t.copied : t.copy}
+                </Button>
+                <Button variant="primary" size="sm" className="flex-1" onClick={() => (window.location.href = `mailto:${email}`)}>
+                  {t.openEmail}
+                </Button>
+              </div>
             </div>
           )}
         </div>

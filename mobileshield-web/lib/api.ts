@@ -6,29 +6,19 @@ export interface AnalysisResponse {
   normalized_url: string;
   domain: string;
   final_url: string | null;
+  resolved_url?: string | null;
+  resolved_domain?: string | null;
   redirect_hops: number;
   risk_score: number;
+  status?: 'BENIGN' | 'SUSPICIOUS' | 'MALICIOUS';
   verdict: Verdict;
   confidence: Confidence;
   reasons: string[];
+  risk_reasons?: string[];
+  is_shortener?: boolean;
   signals: Record<string, unknown>;
   breakdown: { key: string; points: number; description: string }[];
   reputation?: string;
-}
-
-export interface ScanSummary {
-  id: number;
-  created_at: string;
-  normalized_url: string;
-  domain: string;
-  final_url: string | null;
-  risk_score: number;
-  verdict: Verdict;
-  confidence: Confidence;
-  reasons: string[];
-  breakdown: { key: string; points: number; description: string }[];
-  reputation?: string;
-  domain_reputation?: Record<string, unknown>;
 }
 
 export class ApiError extends Error {
@@ -117,12 +107,6 @@ export async function analyzeUrl(url: string): Promise<AnalysisResponse> {
   return apiFetch<AnalysisResponse>('/v1/analyze', {
     method: 'POST',
     body: JSON.stringify({ url }),
-  });
-}
-
-export async function fetchScans(limit: number): Promise<{ items: ScanSummary[]; count: number }> {
-  return apiFetch<{ items: ScanSummary[]; count: number }>(`/v1/scans?limit=${limit}`, {
-    method: 'GET',
   });
 }
 

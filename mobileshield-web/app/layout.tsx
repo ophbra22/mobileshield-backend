@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'MobileShield AI | URL Risk Scanner',
@@ -10,7 +11,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="he" dir="rtl">
-      <body className="bg-bg text-text">{children}</body>
+      <body className="bg-bg text-text">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
